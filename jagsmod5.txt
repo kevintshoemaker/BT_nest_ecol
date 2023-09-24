@@ -1,0 +1,146 @@
+
+model{
+
+# carapace length (interpolation only)
+
+cl.mean ~ dnorm(0,1)  # standardized...
+cl.sd ~ dunif(0,5)
+cl.prec <- pow(cl.sd,-2)
+for(n in 1:nnests){
+  cl[n] ~ dnorm(cl.mean,cl.prec)  # data node
+}
+
+# nest temperature process (interpolation)
+
+for(y in 1:nyears){
+  nt.base[y] ~ dnorm(0,1)
+}
+
+nt.siteeff.sd ~ dgamma(3,3)
+nt.siteeff.prec <- pow(nt.siteeff.sd,-2)
+for(s in 1:nsites){
+  nt.siteeff[s] ~ dnorm(0,nt.siteeff.prec)
+}
+
+# nt.base ~ dnorm(0,1)   
+nt.excl.eff ~ dnorm(0,0.1)  # effect of excluder on temperature
+nt.sd ~ dunif(0,5)
+nt.prec <- pow(nt.sd,-2)
+for(n in 1:nnests){
+  nt.exp[n] <- nt.base[yr_f[n]] + nt.excl.eff * is_excl[n] + nt.siteeff[site_f[n]]
+  nt[n] ~ dnorm(nt.exp[n],nt.prec)    #   data node
+}
+
+# nest predation process
+
+   # random effect
+pred.syeff.sd ~ dgamma(3,3)
+pred.syeff.prec <- pow(pred.syeff.sd,-2)
+for(t in 1:nsy){
+  pred.syeff[t] ~ dnorm(0,pred.syeff.prec)
+}
+
+pred.base ~ dunif(0,1)    # probability of nest being predated
+pred.base.l <- log(pred.base/(1-pred.base))
+pred.excl.eff ~ dnorm(0,.1)
+for(n in 1:nnests){  # loop through nests
+  logit(pred.exp[n]) <-  pred.base.l + pred.excl.eff*is_excl[n] + pred.syeff[sy[n]]   # predation process- at the nest level
+}
+
+# number of eggs predated...
+
+eggpred ~ dunif(0,1)   # probability of egg being predated if nest is predated
+
+# clutch size  (total eggs laid)
+
+neggs.base ~ dunif(0,10)
+neggs.base.l <- log(neggs.base)
+neggs.cl.eff ~ dnorm(0,.1)
+for(n in 1:nnests){  # loop through nests
+  log(neggs.exp[n]) <- neggs.base.l + neggs.cl.eff*cl[n]
+}
+
+# probability of hatching successfully if not predated
+
+hatch.ebv.sd ~ dunif(0.25,5)
+hatch.ebv.prec <- pow(hatch.ebv.sd,-2)
+hatch.base ~ dunif(0,1)
+hatch.base.l <- log(hatch.base/(1-hatch.base))
+hatch.nt.eff ~ dnorm(0,1)   # effect of nest temp on the prob of hatching successfully
+hatch.excl.eff ~ dnorm(0,.1)    # effect of pred excl on prob of hatching successfully
+for(n in 1:nnests){  # loop through nests
+  hatch.ebv[n] ~ dnorm(0,hatch.ebv.prec)
+  logit(hatch.exp[n]) <- hatch.base.l + hatch.nt.eff*nt[n] + 
+                          hatch.excl.eff*is_excl[n] + 
+                          hatch.ebv[n]
+}
+
+# Incubation
+inc.base ~ dunif(50,100)
+inc.sd ~ dunif(0,10)
+inc.prec <- pow(inc.sd,-2)
+inc.excl.eff ~ dnorm(0,.1)
+inc.nt.eff ~ dnorm(0,1)   # effect of nest temp on incubation duration
+
+   # random effect
+# inc.syeff.sd ~ dunif(0,5)
+# inc.syeff.prec <- pow(inc.syeff.sd,-2)
+# for(t in 1:nsy){
+#   inc.syeff[t] ~ dnorm(0,inc.syeff.prec)
+# }
+
+for(n in 1:nnests){
+  inc.exp[n] <- inc.base + inc.nt.eff*nt[n] +
+                 inc.excl.eff*is_excl[n]    #+ 
+                 # inc.syeff[sy[n]]
+}
+
+# likelihood
+
+for(n in 1:nnests){  # loop through nests
+  pred[n] ~ dbern(pred.exp[n])  # data node: is the nest predated or no?
+  neggs[n] ~ dpois(neggs.exp[n])  # data node: clutch size
+  npred[n] ~ dbin(eggpred,neggs[n])   # data node: number of eggs predated
+  inc[n] ~ dnorm(inc.exp[n],inc.prec)   # data node: incubation timing
+}
+
+for(n2 in 1:nnests2){  # loop through nests with at least one non-predated egg
+  hatched[ndx[n2]] ~ dbin(hatch.exp[ndx[n2]],neggs.rem[ndx[n2]])   # data.node: number of eggs successfully hatched
+}  
+
+# posterior predictive checks
+
+for(n in 1:nnests){  # loop through nests
+  hatched.sim[n] ~ dbin(hatch.exp[n],neggs.rem[n])
+  sq.err.obs[n] <- pow(hatched[n]-(hatch.exp[n]*neggs.rem[n]),2)
+  sq.err.sim[n] <- pow(hatched.sim[n]-(hatch.exp[n]*neggs.rem[n]),2)
+}
+
+sse.obs <- sum(sq.err.obs[1:nnests])
+sse.sim <- sum(sq.err.sim[1:nnests])
+
+# derived parameters: excl vs no
+
+  # nesttemp
+nt.excl <- nt.base + nt.excl.eff
+nt.noexcl <- nt.base
+
+  # predation, nest level
+logit(pred.excl) <-  pred.base.l + pred.excl.eff
+logit(pred.noexcl) <-  pred.base.l
+
+  # clutch size
+neggs.this <- neggs.base
+
+  # eggs remaining after predation
+neggsrem.excl <- neggs.this * (pred.excl*eggpred + (1-pred.excl))
+neggsrem.noexcl <- neggs.this * (pred.noexcl*eggpred + (1-pred.noexcl))
+
+logit(phatch.excl) <- hatch.base.l + hatch.excl.eff # + hatch.nt.eff*nt.excl
+logit(phatch.noexcl) <- hatch.base.l #+ hatch.nt.eff*nt.noexcl
+
+hatch.excl <- neggsrem.excl * phatch.excl
+hatch.noexcl <- neggsrem.noexcl * phatch.noexcl
+
+}
+    
